@@ -76,6 +76,8 @@ from ..utils import (
     populate_queues,
 )
 from .configuration_smolvla import SmolVLAConfig
+from .depth_distillation import confidence_masked_log_l1, depth_lambda, pool_teacher_to_patch_grid
+from .depth_probe import SpatialRegisterDepthProbe
 from .smolvlm_with_expert import SmolVLMWithExpertModel
 from .vggt_scene_encoder import FrozenVGGTSceneEncoder
 
@@ -300,9 +302,16 @@ class SmolVLAPolicy(PreTrainedPolicy):
         actions_is_pad = batch.get("action_is_pad")
         loss_dict = {}
         losses = self.model.forward(images, img_masks, lang_tokens, lang_masks, state, actions, noise, time)
+        depth_loss = self.model.compute_depth_distillation(images, self._last_image_valid_masks)
+        depth_weight = depth_lambda(self.model._depth_step, self.config.depth_distillation_lambda, self.config.depth_distillation_warmup_steps) if depth_loss is not None else 0.0
+        if depth_loss is not None:
+            self.model._depth_step += 1
         original_action_dim = self.config.action_feature.shape[0]
         losses = losses[:, :, :original_action_dim]
         loss_dict["losses_after_forward"] = losses.clone().mean().item()
+        if depth_loss is not None:
+            loss_dict["loss_depth"] = depth_loss.detach().item()
+            loss_dict["lambda_depth"] = depth_weight
 
         if actions_is_pad is not None:
             in_episode_bound = ~actions_is_pad
@@ -330,6 +339,9 @@ class SmolVLAPolicy(PreTrainedPolicy):
                 num_valid = ((~actions_is_pad).sum() * losses.shape[-1]).clamp_min(1)
                 loss = losses.sum() / num_valid
             loss_dict["loss"] = loss.item()
+            if depth_loss is not None:
+                loss = loss + depth_weight * depth_loss
+                loss_dict["loss_total"] = loss.item()
             return loss, loss_dict
 
     def prepare_images(self, batch):
@@ -338,6 +350,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
         """
         images = []
         img_masks = []
+        image_valid_masks = []
         present_img_keys = [key for key in self.config.image_features if key in batch]
         missing_img_keys = [key for key in self.config.image_features if key not in batch]
 
@@ -348,10 +361,17 @@ class SmolVLAPolicy(PreTrainedPolicy):
         # Preprocess image features present in the batch
         for key in present_img_keys:
             img = batch[key][:, -1, :, :, :] if batch[key].ndim == 5 else batch[key]
+            valid_pixels = torch.ones((img.shape[0], 1, img.shape[-2], img.shape[-1]), dtype=img.dtype, device=img.device)
             if self.config.resize_imgs_with_padding is not None:
                 # SmolVLA stores the target as (width, height); the shared helper expects (height, width).
                 img = resize_with_pad(
                     img,
+                    self.config.resize_imgs_with_padding[1],
+                    self.config.resize_imgs_with_padding[0],
+                    pad_value=0,
+                )
+                valid_pixels = resize_with_pad(
+                    valid_pixels,
                     self.config.resize_imgs_with_padding[1],
                     self.config.resize_imgs_with_padding[0],
                     pad_value=0,
@@ -368,6 +388,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
                 mask = torch.ones(bsize, dtype=torch.bool, device=device)
             images.append(img)
             img_masks.append(mask)
+            image_valid_masks.append(valid_pixels[:, 0] > 0.5)
 
         # Create image features not present in the batch
         # as fully 0 padded images.
@@ -378,6 +399,8 @@ class SmolVLAPolicy(PreTrainedPolicy):
             mask = torch.zeros_like(mask)
             images.append(img)
             img_masks.append(mask)
+            image_valid_masks.append(torch.zeros_like(img[:, 0], dtype=torch.bool))
+        self._last_image_valid_masks = image_valid_masks
         return images, img_masks
 
     def _pi_aloha_decode_state(self, state):
@@ -521,11 +544,17 @@ class VLAFlowMatching(nn.Module):
 
         self.vggt_scene_encoder = None
         self.scene_projector = None
+        self.depth_probe = None
+        self._depth_step = 0
+        self.last_depth_loss = None
         if self.config.use_vggt_scene_tokens:
             if not self.config.vggt_checkpoint or not self.config.vggt_code_path:
                 raise ValueError("VGGT checkpoint and code path are required")
-            self.vggt_scene_encoder = FrozenVGGTSceneEncoder(self.config.vggt_checkpoint, self.config.vggt_code_path, self.config.vggt_image_resolution, self.config.vggt_num_register_tokens, self.config.device or "cuda")
+            self.vggt_scene_encoder = FrozenVGGTSceneEncoder(self.config.vggt_checkpoint, self.config.vggt_code_path, self.config.vggt_image_resolution, self.config.vggt_num_register_tokens, self.config.device or "cuda", self.config.use_vggt_depth_distillation)
             self.scene_projector = nn.Linear(self.vggt_scene_encoder.output_dim, self.vlm_with_expert.config.text_config.hidden_size)
+            if self.config.use_vggt_depth_distillation:
+                hidden_size = self.vlm_with_expert.config.text_config.hidden_size
+                self.depth_probe = SpatialRegisterDepthProbe(hidden_size, hidden_size)
 
         self.set_requires_grad()
         self.fake_image_token = self.vlm_with_expert.processor.tokenizer.fake_image_token_id
@@ -703,6 +732,42 @@ class VLAFlowMatching(nn.Module):
         att_masks = torch.tensor(att_masks, dtype=embs.dtype, device=embs.device)
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
         return embs, pad_masks, att_masks
+
+    def compute_depth_distillation(self, images: list[Tensor], image_valid_masks: list[Tensor]) -> Tensor | None:
+        if not self.training or self.depth_probe is None:
+            return None
+        teacher = self.vggt_scene_encoder(images, include_depth=True)
+        registers = teacher["registers"]
+        projected = self.scene_projector(
+            registers.to(device=self.scene_projector.weight.device, dtype=self.scene_projector.weight.dtype)
+        )
+        projected = projected.reshape(
+            projected.shape[0], 2, self.config.vggt_num_register_tokens, projected.shape[-1]
+        )
+        students, targets, masks = [], [], []
+        probe_dtype = self.depth_probe.q_proj.weight.dtype
+        for view, image in enumerate(images[:2]):
+            with torch.no_grad():
+                image_tokens = self.vlm_with_expert.embed_image(image)
+                image_tokens = image_tokens * math.sqrt(image_tokens.shape[-1])
+            patch_side = math.isqrt(image_tokens.shape[1])
+            if patch_side * patch_side != image_tokens.shape[1]:
+                raise RuntimeError(f"Expected square spatial image tokens, got {image_tokens.shape[1]}")
+            student = self.depth_probe(
+                image_tokens.to(dtype=probe_dtype), projected[:, view].to(dtype=probe_dtype), (patch_side, patch_side)
+            )
+            dense_depth = teacher["depth"][:, view].squeeze(-1)
+            dense_conf = teacher["depth_conf"][:, view]
+            non_padding = F.interpolate(image_valid_masks[view][:, None].float(), size=dense_depth.shape[-2:], mode="nearest")[:, 0].bool()
+            target, mask = pool_teacher_to_patch_grid(
+                dense_depth, dense_conf, non_padding, (patch_side, patch_side),
+                self.config.depth_distillation_confidence_quantile,
+                self.config.depth_distillation_min_valid_ratio,
+            )
+            students.append(student)
+            targets.append(target)
+            masks.append(mask)
+        return confidence_masked_log_l1(students, targets, masks)
 
     def forward(
         self, images, img_masks, lang_tokens, lang_masks, state, actions, noise=None, time=None

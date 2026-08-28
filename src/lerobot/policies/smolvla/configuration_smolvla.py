@@ -91,6 +91,11 @@ class SmolVLAConfig(PreTrainedConfig):
     vggt_code_path: str | None = None
     vggt_image_resolution: int = 512
     vggt_num_register_tokens: int = 16
+    use_vggt_depth_distillation: bool = False
+    depth_distillation_lambda: float = 0.05
+    depth_distillation_warmup_steps: int = 1000
+    depth_distillation_confidence_quantile: float = 0.2
+    depth_distillation_min_valid_ratio: float = 0.25
 
     attention_mode: str = "cross_attn"
 
