@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+<defs>
+  <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#263238"/></marker>
+  <marker id="blueArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1976d2"/></marker>
+  <style>
+    .title{font:700 30px Arial;fill:#102027}.label{font:600 20px Arial;fill:#102027}.small{font:16px Arial;fill:#37474f}.tiny{font:14px Arial;fill:#546e7a}.box{stroke:#455a64;stroke-width:2;rx:12}.freeze{fill:#e8f5e9;stroke:#388e3c}.train{fill:#fff3e0;stroke:#ef6c00}.action{fill:#e3f2fd;stroke:#1976d2}.loss{fill:#fce4ec;stroke:#c2185b}.aux{fill:#f3e5f5;stroke:#7b1fa2}.dash{fill:none;stroke:#78909c;stroke-width:2;stroke-dasharray:9 7}.arrow{stroke:#263238;stroke-width:3;fill:none;marker-end:url(#arrow)}.blue{stroke:#1976d2;stroke-width:3;fill:none;marker-end:url(#blueArrow)}
+  </style>
+</defs>
+<rect width="1600" height="900" fill="white"/>
+<text x="800" y="55" text-anchor="middle" class="title">E2: Geometry-Preserving VGGT-Ω Depth Distillation for SmolVLA</text>
+<text x="800" y="88" text-anchor="middle" class="small">Training-time auxiliary supervision; the E1 action path is unchanged</text>
+
+<rect x="35" y="130" width="250" height="170" class="box action"/>
+<text x="160" y="170" text-anchor="middle" class="label">Two RGB views</text>
+<rect x="65" y="195" width="80" height="55" fill="#90caf9" stroke="#1565c0"/><rect x="175" y="195" width="80" height="55" fill="#80cbc4" stroke="#00695c"/>
+<text x="105" y="276" text-anchor="middle" class="tiny">agent</text><text x="215" y="276" text-anchor="middle" class="tiny">wrist</text>
+
+<rect x="335" y="130" width="300" height="170" class="box freeze"/>
+<text x="485" y="170" text-anchor="middle" class="label">Frozen VGGT-Ω 1B @ 512</text>
+<text x="485" y="205" text-anchor="middle" class="small">no gradient · eval() · no_grad()</text>
+<text x="485" y="240" text-anchor="middle" class="small">registers R ∈ ℝ<tspan baseline-shift="super" font-size="12">32×2048</tspan></text>
+<text x="485" y="270" text-anchor="middle" class="small">depth D<tspan baseline-shift="sub" font-size="12">T</tspan>, confidence C</text>
+
+<path d="M285 215 L335 215" class="arrow"/><path d="M635 205 L710 205" class="arrow"/>
+<rect x="710" y="130" width="235" height="170" class="box train"/>
+<text x="827" y="170" text-anchor="middle" class="label">SceneProjector</text>
+<text x="827" y="207" text-anchor="middle" class="small">2048 → 960</text>
+<text x="827" y="245" text-anchor="middle" class="small">trainable</text>
+<text x="827" y="273" text-anchor="middle" class="tiny">R′ = P(R), split per view</text>
+
+<rect x="1015" y="130" width="270" height="170" class="box action"/>
+<text x="1150" y="170" text-anchor="middle" class="label">Prefix concatenation</text>
+<text x="1150" y="210" text-anchor="middle" class="small">[image tokens, language, state]</text>
+<text x="1150" y="250" text-anchor="middle" class="small">⊕ projected registers R′</text>
+<text x="1150" y="278" text-anchor="middle" class="tiny">same order and masks as E1</text>
+<path d="M945 215 L1015 215" class="arrow"/>
+
+<rect x="1350" y="130" width="210" height="170" class="box action"/>
+<text x="1455" y="170" text-anchor="middle" class="label">SmolVLA</text>
+<text x="1455" y="210" text-anchor="middle" class="small">VLM + action expert</text>
+<text x="1455" y="250" text-anchor="middle" class="small">action prediction</text>
+<path d="M1285 215 L1350 215" class="arrow"/>
+
+<rect x="35" y="410" width="1525" height="400" class="dash"/>
+<text x="60" y="445" class="label" fill="#6d4c41">Training-only E2 auxiliary branch</text>
+<path d="M1150 300 C1150 355 800 355 800 410" class="blue"/>
+<rect x="110" y="500" width="285" height="125" class="box action"/>
+<text x="252" y="540" text-anchor="middle" class="label">Detached image patch tokens</text>
+<text x="252" y="578" text-anchor="middle" class="small">Q = stopgrad(Z<tspan baseline-shift="sub" font-size="12">img</tspan>)</text>
+<text x="252" y="606" text-anchor="middle" class="tiny">native H<tspan baseline-shift="sub" font-size="11">p</tspan> × W<tspan baseline-shift="sub" font-size="11">p</tspan> grid</text>
+<path d="M800 410 C650 455 420 470 395 540" class="blue"/>
+
+<rect x="490" y="500" width="285" height="125" class="box aux"/>
+<text x="632" y="540" text-anchor="middle" class="label">Spatial register-value probe</text>
+<text x="632" y="578" text-anchor="middle" class="small">cross-attention: Q ↔ K(R′)</text>
+<text x="632" y="606" text-anchor="middle" class="tiny">direct V(R′), no dropout</text>
+<path d="M395 562 L490 562" class="blue"/><path d="M827 300 C800 390 735 455 700 500" class="blue"/>
+
+<rect x="870" y="500" width="260" height="125" class="box aux"/>
+<text x="1000" y="540" text-anchor="middle" class="label">Depth head</text>
+<text x="1000" y="578" text-anchor="middle" class="small">Linear → GELU → Linear</text>
+<text x="1000" y="606" text-anchor="middle" class="small">D̂ = softplus(z) + 10⁻⁶</text>
+<path d="M775 562 L870 562" class="blue"/>
+
+<rect x="1220" y="500" width="270" height="125" class="box loss"/>
+<text x="1355" y="540" text-anchor="middle" class="label">Confidence-masked loss</text>
+<text x="1355" y="578" text-anchor="middle" class="small">L<tspan baseline-shift="sub" font-size="12">depth</tspan> = masked log-L1(D̂, D<tspan baseline-shift="sub" font-size="12">T</tspan>)</text>
+<text x="1355" y="606" text-anchor="middle" class="tiny">top 80% confidence · valid patches ≥25%</text>
+<path d="M1130 562 L1220 562" class="blue"/><path d="M485 300 C580 405 1210 430 1280 500" class="blue"/>
+
+<rect x="420" y="690" width="760" height="80" class="box train"/>
+<text x="800" y="725" text-anchor="middle" class="label">Total training objective</text>
+<text x="800" y="755" text-anchor="middle" class="small">L = L<tspan baseline-shift="sub" font-size="12">action</tspan> + λ(t) · L<tspan baseline-shift="sub" font-size="12">depth</tspan>     λ(t): 0 → 0.05 over 1,000 steps</text>
+<path d="M1455 300 C1455 650 1180 675 1180 730" class="arrow"/><path d="M1355 625 L1100 690" class="blue"/>
+<text x="800" y="845" text-anchor="middle" class="small">Inference: depth head and VGGT dense depth output are disabled; only frozen registers → projector → SmolVLA prefix remain.</text>
+</svg>
