@@ -644,7 +644,13 @@ class VLAFlowMatching(nn.Module):
                 pad_masks.append(image_end_mask)
                 att_masks += [0] * (image_end_mask.shape[1])
         if self.vggt_scene_encoder is not None:
-            scene_tokens = self.vggt_scene_encoder(images)
+            include_depth = self.training and self.depth_probe is not None
+            vggt_output = self.vggt_scene_encoder(images, include_depth=include_depth)
+            if include_depth:
+                self._last_vggt_teacher = vggt_output
+                scene_tokens = vggt_output["registers"]
+            else:
+                scene_tokens = vggt_output
             scene_emb = self.scene_projector(
                 scene_tokens.to(device=img_emb.device, dtype=self.scene_projector.weight.dtype)
             ).to(dtype=img_emb.dtype)
@@ -736,7 +742,9 @@ class VLAFlowMatching(nn.Module):
     def compute_depth_distillation(self, images: list[Tensor], image_valid_masks: list[Tensor]) -> Tensor | None:
         if not self.training or self.depth_probe is None:
             return None
-        teacher = self.vggt_scene_encoder(images, include_depth=True)
+        teacher = getattr(self, "_last_vggt_teacher", None)
+        if teacher is None:
+            teacher = self.vggt_scene_encoder(images, include_depth=True)
         registers = teacher["registers"]
         projected = self.scene_projector(
             registers.to(device=self.scene_projector.weight.device, dtype=self.scene_projector.weight.dtype)
