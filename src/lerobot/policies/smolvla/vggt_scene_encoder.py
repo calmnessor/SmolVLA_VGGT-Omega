@@ -4,6 +4,15 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+class _FloatDenseHead(nn.Module):
+    def __init__(self, dense_head):
+        super().__init__()
+        self.dense_head = dense_head
+
+    def forward(self, aggregated_tokens_list, images, patch_token_start):
+        tokens = [None if token is None else token.float() for token in aggregated_tokens_list]
+        return self.dense_head(tokens, images=images.float(), patch_token_start=patch_token_start)
+
 def prepare_vggt_images(images: list[Tensor], resolution: int) -> Tensor:
     """Convert two SmolVLA images from [-1,1] to [B,2,3,R,R] in [0,1]."""
     if len(images) != 2:
@@ -34,8 +43,12 @@ class FrozenVGGTSceneEncoder(nn.Module):
         keys = set(model.state_dict())
         missing, unexpected = model.load_state_dict({k:v for k,v in state.items() if k in keys}, strict=False)
         if missing or unexpected: raise RuntimeError(f"VGGT checkpoint mismatch: missing={missing}, unexpected={unexpected}")
+        if enable_depth:
+            model.dense_head = _FloatDenseHead(model.dense_head)
         dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         model.to(device=device, dtype=dtype).eval()
+        if enable_depth:
+            model.dense_head.dense_head.float()
         for param in model.parameters(): param.requires_grad = False
         self.__dict__["_model"] = model
         self.image_resolution, self.num_register_tokens = image_resolution, num_register_tokens
