@@ -193,11 +193,6 @@ def update_policy(
                 ga /= torch.distributed.get_world_size(); gd /= torch.distributed.get_world_size()
             m = compute_gradient_metrics([ga], [gd], [torch.empty_like(ga)], depth_weight, config.depth_distillation_lambda)
             m.update({"step": current_step, "loss_action": float(action_loss.detach()), "loss_depth": float(depth_loss.detach()), "lambda": float(depth_weight)})
-            if diagnostic_accumulator is not None:
-                diagnostic_accumulator.add(m)
-            if diagnostic_file is not None and accelerator.is_main_process:
-                diagnostic_file.write(json.dumps(m) + "\n")
-                diagnostic_file.flush()
 
             if config.enable_action_aligned_depth:
                 final_scene_grad, surgery = action_aligned_depth_gradient(
@@ -208,6 +203,11 @@ def update_policy(
                 raw_policy._e4_scene_grad = final_scene_grad
                 raw_policy._e4_metrics = surgery
 
+            if diagnostic_accumulator is not None:
+                diagnostic_accumulator.add(m)
+            if diagnostic_file is not None and accelerator.is_main_process:
+                diagnostic_file.write(json.dumps(m) + "\n")
+                diagnostic_file.flush()
     # Use accelerator's backward method.
     accelerator.backward(loss)
 
