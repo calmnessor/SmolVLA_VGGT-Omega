@@ -340,7 +340,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
                 loss = losses.sum() / num_valid
             loss_dict["loss"] = loss.item()
             if depth_loss is not None:
-                if self.config.enable_gradient_diagnostic:
+                if self.config.enable_gradient_diagnostic or self.config.enable_action_aligned_depth:
                     self._gradient_diagnostic_components = (loss, depth_loss, depth_weight)
                 loss = loss + depth_weight * depth_loss
                 loss_dict["loss_total"] = loss.item()

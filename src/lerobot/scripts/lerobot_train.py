@@ -58,7 +58,7 @@ from lerobot.envs import close_envs, make_env, make_env_pre_post_processors
 from lerobot.jobs import submit_to_hf
 from lerobot.optim.factory import make_optimizer_and_scheduler
 from lerobot.policies import PreTrainedPolicy, make_policy, make_pre_post_processors
-from lerobot.policies.smolvla.gradient_diagnostic import GradientMetricAccumulator, compute_gradient_metrics, flatten_grads
+from lerobot.policies.smolvla.gradient_diagnostic import GradientMetricAccumulator, action_aligned_depth_gradient, compute_gradient_metrics, flatten_grads
 from lerobot.rewards import make_reward_pre_post_processors
 from lerobot.utils.collate import lerobot_collate_fn
 from lerobot.utils.import_utils import _peft_available, register_third_party_plugins, require_package
@@ -178,7 +178,7 @@ def update_policy(
 
     raw_policy = accelerator.unwrap_model(policy)
     config = getattr(raw_policy, "config", None)
-    if config is not None and getattr(config, "enable_gradient_diagnostic", False) and diagnostic_accumulator is not None and current_step < config.gradient_diagnostic_steps and current_step % max(1, config.gradient_diagnostic_interval) == 0:
+    if config is not None and (getattr(config, "enable_action_aligned_depth", False) or (getattr(config, "enable_gradient_diagnostic", False) and current_step < config.gradient_diagnostic_steps and current_step % max(1, config.gradient_diagnostic_interval) == 0)):
         model = raw_policy.model
         components = getattr(raw_policy, "_gradient_diagnostic_components", None)
         if components is not None and model.scene_projector is not None:
@@ -193,21 +193,56 @@ def update_policy(
                 ga /= torch.distributed.get_world_size(); gd /= torch.distributed.get_world_size()
             m = compute_gradient_metrics([ga], [gd], [torch.empty_like(ga)], depth_weight, config.depth_distillation_lambda)
             m.update({"step": current_step, "loss_action": float(action_loss.detach()), "loss_depth": float(depth_loss.detach()), "lambda": float(depth_weight)})
-            diagnostic_accumulator.add(m)
+            if diagnostic_accumulator is not None:
+                diagnostic_accumulator.add(m)
             if diagnostic_file is not None and accelerator.is_main_process:
                 diagnostic_file.write(json.dumps(m) + "\n")
                 diagnostic_file.flush()
 
-    # Use accelerator's backward method
+            if config.enable_action_aligned_depth:
+                final_scene_grad, surgery = action_aligned_depth_gradient(
+                    ga, gd, depth_weight, config.depth_gradient_ratio_cap
+                )
+                m.update(surgery)
+                raw_policy._e4_scene_params = params
+                raw_policy._e4_scene_grad = final_scene_grad
+                raw_policy._e4_metrics = surgery
+
+    # Use accelerator's backward method.
     accelerator.backward(loss)
 
-    # Clip gradients if specified
-    if grad_clip_norm > 0:
+    # Replace only the shared SceneProjector gradient with the E4 gradient surgery result.
+    if config is not None and getattr(config, "enable_action_aligned_depth", False):
+        scene_params = getattr(raw_policy, "_e4_scene_params", None)
+        scene_grad = getattr(raw_policy, "_e4_scene_grad", None)
+        if scene_params is None or scene_grad is None:
+            raise RuntimeError("E4 is enabled but SceneProjector gradients were not prepared")
+        offset = 0
+        for param in scene_params:
+            size = param.numel()
+            if param.grad is not None:
+                param.grad.copy_(scene_grad[offset : offset + size].reshape_as(param).to(param.grad))
+            offset += size
+        raw_policy._e4_scene_params = None
+        raw_policy._e4_scene_grad = None
+
+    # E4 uses independent clipping so depth-only gradients cannot rescale action updates.
+    if config is not None and getattr(config, "enable_action_aligned_depth", False):
+        named_params = [(name, param) for name, param in policy.named_parameters() if param.requires_grad]
+        depth_params = [param for name, param in named_params if "depth_probe" in name]
+        action_params = [param for name, param in named_params if "depth_probe" not in name]
+        if grad_clip_norm > 0:
+            grad_norm = accelerator.clip_grad_norm_(action_params, grad_clip_norm)
+            if depth_params:
+                accelerator.clip_grad_norm_(depth_params, grad_clip_norm)
+        else:
+            grad_norm = torch.nn.utils.clip_grad_norm_(action_params, float("inf"), error_if_nonfinite=False)
+            if depth_params:
+                torch.nn.utils.clip_grad_norm_(depth_params, float("inf"), error_if_nonfinite=False)
+    elif grad_clip_norm > 0:
         grad_norm = accelerator.clip_grad_norm_(policy.parameters(), grad_clip_norm)
     else:
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            policy.parameters(), float("inf"), error_if_nonfinite=False
-        )
+        grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), float("inf"), error_if_nonfinite=False)
 
     # Optimizer step
     with lock if lock is not None else nullcontext():

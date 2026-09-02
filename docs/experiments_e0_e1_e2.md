@@ -281,3 +281,17 @@ outputs/smolvla_libero_vggt_e2_lambda001
 - `lambda=0.01` 已生成 `030000` checkpoint 并完成四 suite 评估，正式结果为 51/66/65/46，宏平均 57.0%。
 - 当前最佳已完成模型仍为 E1（59.5%）；`lambda=0.01` 相比 `lambda=0.05`（56.0%）提高 1.0 个百分点，但仍比 E1 低 2.5 个百分点。
 - 后续报告区分训练完成、checkpoint 完整和评估完成。
+
+## 12. E4：Action-Preserving Geometry Distillation（实现中）
+
+E4 不更新冻结的 VGGT register，而是保护 register 经过 `SceneProjector` 后形成的 action-oriented representation。训练时分别计算 `SceneProjector` 上的 action/depth 梯度：当 depth 梯度与 action 梯度冲突时，删除冲突分量；随后将 depth 对 action 的有效梯度比例限制为 `0.15`。DepthProbe 仍正常接收 depth loss，但与 action/shared 参数分组裁剪，避免 global clipping 被 depth-only 梯度间接影响。
+
+配置：
+
+```text
+enable_action_aligned_depth = true
+depth_distillation_lambda = 0.05
+depth_gradient_ratio_cap = 0.15
+```
+
+E4 默认关闭，E0/E1/E2 的行为不变。正式实验仍应从 E0 的 `030000` checkpoint 初始化，使用与 E1/E2 相同的 30,000 steps、有效 batch size 16 和四 suite 评估协议。实现后先运行 100--200 steps debug，检查 projection/cap 指标、无 NaN/DDP hang，再启动正式训练。

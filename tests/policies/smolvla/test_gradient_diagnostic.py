@@ -3,9 +3,29 @@ import pytest
 
 from lerobot.policies.smolvla.gradient_diagnostic import (
     GradientMetricAccumulator,
+    action_aligned_depth_gradient,
     compute_gradient_metrics,
     flatten_grads,
 )
+
+
+def test_action_aligned_gradient_removes_conflict_and_caps_ratio():
+    final, metrics = action_aligned_depth_gradient(
+        torch.tensor([1.0, 0.0]), torch.tensor([-10.0, 4.0]), depth_weight=0.05, ratio_cap=0.15
+    )
+    assert torch.dot(torch.tensor([1.0, 0.0]), final) >= -1e-7
+    assert torch.linalg.vector_norm(final - torch.tensor([1.0, 0.0])) <= 0.15 + 1e-6
+    assert metrics["projection_applied"] is True
+    assert metrics["cap_applied"] is True
+    assert metrics["effective_ratio"] <= 0.15 + 1e-6
+
+
+def test_action_aligned_gradient_preserves_nonconflicting_depth():
+    final, metrics = action_aligned_depth_gradient(
+        torch.tensor([1.0, 0.0]), torch.tensor([0.0, 2.0]), depth_weight=0.05, ratio_cap=0.15
+    )
+    assert torch.allclose(final, torch.tensor([1.0, 0.1]))
+    assert metrics["projection_applied"] is False
 
 
 def test_flatten_grads_preserves_parameter_alignment_for_none():

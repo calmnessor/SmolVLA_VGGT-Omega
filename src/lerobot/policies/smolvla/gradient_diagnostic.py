@@ -8,6 +8,28 @@ from typing import Iterable
 
 import torch
 
+def action_aligned_depth_gradient(action: torch.Tensor, depth: torch.Tensor, depth_weight: float, ratio_cap: float, eps: float = 1e-8) -> tuple[torch.Tensor, dict[str, float | bool | None]]:
+    """Project conflicting depth gradients and cap their weighted norm."""
+    if action.shape != depth.shape:
+        raise ValueError("action and depth gradients must have identical shapes")
+    action = action.detach().float()
+    depth = depth.detach().float()
+    action_norm = torch.linalg.vector_norm(action)
+    weighted = depth * float(depth_weight)
+    pre_ratio = torch.linalg.vector_norm(weighted) / (action_norm + eps)
+    dot = torch.dot(action, depth)
+    projected = bool(dot.item() < 0 and action_norm.item() >= eps)
+    if projected:
+        depth = depth - dot / (action_norm.square() + eps) * action
+        weighted = depth * float(depth_weight)
+    ratio = torch.linalg.vector_norm(weighted) / (action_norm + eps)
+    capped = bool(ratio.item() > ratio_cap and action_norm.item() >= eps)
+    if capped:
+        weighted = weighted * (float(ratio_cap) * action_norm / (torch.linalg.vector_norm(weighted) + eps))
+        ratio = torch.linalg.vector_norm(weighted) / (action_norm + eps)
+    return action + weighted, {"pre_projection_ratio": float(pre_ratio.item()), "effective_ratio": float(ratio.item()), "projection_applied": projected, "cap_applied": capped}
+
+
 
 def flatten_grads(grads: Iterable[torch.Tensor | None], params: Iterable[torch.Tensor]) -> torch.Tensor:
     """Flatten gradients while preserving parameter positions, filling missing grads with zeros."""

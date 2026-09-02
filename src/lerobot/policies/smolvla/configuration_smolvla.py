@@ -97,6 +97,8 @@ class SmolVLAConfig(PreTrainedConfig):
     depth_distillation_confidence_quantile: float = 0.2
     depth_distillation_min_valid_ratio: float = 0.25
     enable_gradient_diagnostic: bool = False
+    enable_action_aligned_depth: bool = False
+    depth_gradient_ratio_cap: float = 0.15
     gradient_diagnostic_steps: int = 1000
     gradient_diagnostic_interval: int = 10
     gradient_diagnostic_log_interval: int = 100
