@@ -19,6 +19,7 @@ Requires: pip install 'lerobot[training]'  (includes dataset + accelerate + wand
 """
 
 import dataclasses
+import json
 import logging
 import sys
 import time
@@ -57,6 +58,7 @@ from lerobot.envs import close_envs, make_env, make_env_pre_post_processors
 from lerobot.jobs import submit_to_hf
 from lerobot.optim.factory import make_optimizer_and_scheduler
 from lerobot.policies import PreTrainedPolicy, make_policy, make_pre_post_processors
+from lerobot.policies.smolvla.gradient_diagnostic import GradientMetricAccumulator, compute_gradient_metrics, flatten_grads
 from lerobot.rewards import make_reward_pre_post_processors
 from lerobot.utils.collate import lerobot_collate_fn
 from lerobot.utils.import_utils import _peft_available, register_third_party_plugins, require_package
@@ -112,6 +114,9 @@ def update_policy(
     lr_scheduler=None,
     lock=None,
     sample_weighter=None,
+    current_step: int = 0,
+    diagnostic_accumulator: GradientMetricAccumulator | None = None,
+    diagnostic_file=None,
 ) -> tuple[MetricsTracker, dict | None]:
     """
     Performs a single training step to update the policy's weights.
@@ -170,6 +175,28 @@ def update_policy(
             loss, output_dict = policy.forward(batch)
 
         # TODO(rcadene): policy.unnormalize_outputs(out_dict)
+
+    raw_policy = accelerator.unwrap_model(policy)
+    config = getattr(raw_policy, "config", None)
+    if config is not None and getattr(config, "enable_gradient_diagnostic", False) and diagnostic_accumulator is not None and current_step < config.gradient_diagnostic_steps and current_step % max(1, config.gradient_diagnostic_interval) == 0:
+        model = raw_policy.model
+        components = getattr(raw_policy, "_gradient_diagnostic_components", None)
+        if components is not None and model.scene_projector is not None:
+            action_loss, depth_loss, depth_weight = components
+            params = [p for p in model.scene_projector.parameters() if p.requires_grad]
+            ag = torch.autograd.grad(action_loss, params, retain_graph=True, allow_unused=True)
+            dg = torch.autograd.grad(depth_loss, params, retain_graph=True, allow_unused=True)
+            ga = flatten_grads(ag, params).to(accelerator.device)
+            gd = flatten_grads(dg, params).to(accelerator.device)
+            if torch.distributed.is_initialized():
+                torch.distributed.all_reduce(ga); torch.distributed.all_reduce(gd)
+                ga /= torch.distributed.get_world_size(); gd /= torch.distributed.get_world_size()
+            m = compute_gradient_metrics([ga], [gd], [torch.empty_like(ga)], depth_weight, config.depth_distillation_lambda)
+            m.update({"step": current_step, "loss_action": float(action_loss.detach()), "loss_depth": float(depth_loss.detach()), "lambda": float(depth_weight)})
+            diagnostic_accumulator.add(m)
+            if diagnostic_file is not None and accelerator.is_main_process:
+                diagnostic_file.write(json.dumps(m) + "\n")
+                diagnostic_file.flush()
 
     # Use accelerator's backward method
     accelerator.backward(loss)
@@ -598,6 +625,16 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             f"Start offline training on a fixed dataset, with effective batch size: {effective_batch_size}"
         )
 
+    diagnostic_accumulator = None
+    diagnostic_file = None
+    raw_cfg = getattr(accelerator.unwrap_model(policy), "config", None)
+    if raw_cfg is not None and getattr(raw_cfg, "enable_gradient_diagnostic", False):
+        diagnostic_accumulator = GradientMetricAccumulator()
+        if accelerator.is_main_process:
+            from pathlib import Path
+            out = Path(raw_cfg.gradient_diagnostic_output_dir or (cfg.output_dir / "gradient_diagnostic"))
+            out.mkdir(parents=True, exist_ok=True)
+            diagnostic_file = (out / "gradient_metrics.jsonl").open("w")
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
         batch = next(dl_iter)
@@ -616,6 +653,9 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             accelerator=accelerator,
             lr_scheduler=lr_scheduler,
             sample_weighter=sample_weighter,
+            current_step=step,
+            diagnostic_accumulator=diagnostic_accumulator,
+            diagnostic_file=diagnostic_file,
         )
 
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
@@ -779,6 +819,11 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             preprocessor.push_to_hub(active_cfg.repo_id)
             postprocessor.push_to_hub(active_cfg.repo_id)
 
+    if diagnostic_accumulator is not None:
+        if diagnostic_file is not None:
+            diagnostic_file.close()
+        if accelerator.is_main_process:
+            (out / "summary.json").write_text(json.dumps(diagnostic_accumulator.summary(), indent=2))
     # Properly clean up the distributed process group
     accelerator.wait_for_everyone()
     accelerator.end_training()

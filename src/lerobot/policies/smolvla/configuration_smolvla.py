@@ -96,6 +96,11 @@ class SmolVLAConfig(PreTrainedConfig):
     depth_distillation_warmup_steps: int = 1000
     depth_distillation_confidence_quantile: float = 0.2
     depth_distillation_min_valid_ratio: float = 0.25
+    enable_gradient_diagnostic: bool = False
+    gradient_diagnostic_steps: int = 1000
+    gradient_diagnostic_interval: int = 10
+    gradient_diagnostic_log_interval: int = 100
+    gradient_diagnostic_output_dir: str | None = None
 
     attention_mode: str = "cross_attn"
 
