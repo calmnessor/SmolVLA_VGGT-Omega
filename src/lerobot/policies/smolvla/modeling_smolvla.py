@@ -80,6 +80,7 @@ from .depth_distillation import confidence_masked_log_l1, depth_lambda, pool_tea
 from .depth_probe import SpatialRegisterDepthProbe
 from .smolvlm_with_expert import SmolVLMWithExpertModel
 from .vggt_scene_encoder import FrozenVGGTSceneEncoder
+from .wnm_geometry_conditioner import WNMGeometryConditioner
 
 
 class ActionSelectKwargs(TypedDict, total=False):
@@ -547,6 +548,7 @@ class VLAFlowMatching(nn.Module):
         self.vggt_scene_encoder = None
         self.scene_projector = None
         self.depth_probe = None
+        self.wnm_geometry_conditioner = None
         self._depth_step = 0
         self.last_depth_loss = None
         if self.config.use_vggt_scene_tokens:
@@ -557,6 +559,8 @@ class VLAFlowMatching(nn.Module):
             if self.config.use_vggt_depth_distillation:
                 hidden_size = self.vlm_with_expert.config.text_config.hidden_size
                 self.depth_probe = SpatialRegisterDepthProbe(hidden_size, hidden_size)
+        if self.config.use_wnm_geometry_tokens:
+            self.wnm_geometry_conditioner = WNMGeometryConditioner(self.config, self.vlm_with_expert.config.text_config.hidden_size)
 
         self.set_requires_grad()
         self.fake_image_token = self.vlm_with_expert.processor.tokenizer.fake_image_token_id
@@ -582,6 +586,14 @@ class VLAFlowMatching(nn.Module):
     def set_requires_grad(self):
         for params in self.state_proj.parameters():
             params.requires_grad = self.config.train_state_proj
+        if self.wnm_geometry_conditioner is not None:
+            for params in self.wnm_geometry_conditioner.adapter.parameters():
+                params.requires_grad = True
+
+    def encode_geometry(self, history):
+        if history is None or self.wnm_geometry_conditioner is None:
+            return None
+        return self.wnm_geometry_conditioner(history)
 
     def sample_noise(self, shape, device):
         return sample_noise(shape, device)
@@ -590,7 +602,7 @@ class VLAFlowMatching(nn.Module):
         return sample_time_beta(bsize, device, alpha=1.5, beta=1.0, scale=0.999, offset=0.001)
 
     def embed_prefix(
-        self, images, img_masks, lang_tokens, lang_masks, state: torch.Tensor = None
+        self, images, img_masks, lang_tokens, lang_masks, state: torch.Tensor = None, geometry_tokens: torch.Tensor = None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Embed images with SigLIP and language tokens with embedding layer to prepare
         for SmolVLM transformer processing.
@@ -659,6 +671,11 @@ class VLAFlowMatching(nn.Module):
             embs.append(scene_emb)
             pad_masks.append(torch.ones(scene_emb.shape[:2], dtype=torch.bool, device=scene_emb.device))
             att_masks += [0] * scene_emb.shape[1]
+        if geometry_tokens is not None:
+            geometry_tokens = geometry_tokens.to(device=img_emb.device, dtype=img_emb.dtype)
+            embs.append(geometry_tokens)
+            pad_masks.append(torch.ones(geometry_tokens.shape[:2], dtype=torch.bool, device=geometry_tokens.device))
+            att_masks += [0] * geometry_tokens.shape[1]
 
         lang_emb = self.vlm_with_expert.embed_language_tokens(lang_tokens)
         # Normalize language embeddings
@@ -780,7 +797,7 @@ class VLAFlowMatching(nn.Module):
         return confidence_masked_log_l1(students, targets, masks)
 
     def forward(
-        self, images, img_masks, lang_tokens, lang_masks, state, actions, noise=None, time=None
+        self, images, img_masks, lang_tokens, lang_masks, state, actions, noise=None, time=None, geometry_history=None
     ) -> Tensor:
         """Do a full training forward pass and compute the loss (batch_size x num_steps x num_motors)"""
         if noise is None:
@@ -793,7 +810,7 @@ class VLAFlowMatching(nn.Module):
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
-            images, img_masks, lang_tokens, lang_masks, state=state
+            images, img_masks, lang_tokens, lang_masks, state=state, geometry_tokens=self.encode_geometry(geometry_history)
         )
         suffix_embs, suffix_pad_masks, suffix_att_masks = self.embed_suffix(x_t, time)
 
@@ -824,6 +841,7 @@ class VLAFlowMatching(nn.Module):
         lang_masks,
         state,
         noise=None,
+        geometry_history=None,
         **kwargs: Unpack[ActionSelectKwargs],
     ) -> Tensor:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
@@ -835,7 +853,7 @@ class VLAFlowMatching(nn.Module):
             noise = self.sample_noise(actions_shape, device)
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
-            images, img_masks, lang_tokens, lang_masks, state=state
+            images, img_masks, lang_tokens, lang_masks, state=state, geometry_tokens=self.encode_geometry(geometry_history)
         )
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
