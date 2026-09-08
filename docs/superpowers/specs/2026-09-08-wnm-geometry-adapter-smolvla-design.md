@@ -23,7 +23,7 @@ The existing `use_vggt_scene_tokens` register-token/depth-distillation path rema
 
 ### Geometry conditioner
 
-Add a focused conditioner module under `lerobot/src/lerobot/policies/smolvla/` that owns a VGGT-Omega aggregator and a `VGGTOmegaGeometryAdapter` imported from WNM-3D. The aggregator is frozen, evaluated in `torch.no_grad()` with optional BF16 autocast, and its cached multi-level patch features are detached before entering the trainable adapter. The aggregator is kept external to the trainable checkpoint where practical; its checkpoint path is configuration-owned.
+Add a focused conditioner module under `lerobot/src/lerobot/policies/smolvla/` that owns a VGGT-Omega aggregator and a `VGGTOmegaGeometryAdapter` imported from WNM-3D. The aggregator is frozen, evaluated in `torch.no_grad()` with optional BF16 autocast, and its cached multi-level patch features are detached before entering the trainable adapter. The aggregator is never registered in the policy state dict and is restored externally from the configuration-owned checkpoint path in each process.
 
 The adapter uses:
 
