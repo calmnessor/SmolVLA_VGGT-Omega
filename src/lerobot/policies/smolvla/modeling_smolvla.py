@@ -471,7 +471,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
         target_modules = rf"(model\.vlm_with_expert\.lm_expert\..*\.(q|v)_proj|model\.({common_projections}))"
         return {
             "target_modules": target_modules,
-            "modules_to_save": [],
+            "modules_to_save": ["model.wnm_geometry_conditioner.adapter"] if self.config.use_wnm_geometry_tokens else [],
         }
 
     def _validate_peft_config(self, peft_config) -> None:
