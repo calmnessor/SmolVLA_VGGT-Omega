@@ -173,9 +173,9 @@ class SmolVLAPolicy(PreTrainedPolicy):
 
     def reset(self):
         """This should be called whenever the environment is reset."""
-        self._queues = {
-            ACTION: deque(maxlen=self.config.n_action_steps),
-        }
+        self._queues = {ACTION: deque(maxlen=self.config.n_action_steps)}
+        if self.config.use_wnm_geometry_tokens:
+            self._wnm_geometry_history = deque(maxlen=self.config.wnm_geometry_history)
 
     def init_rtc_processor(self):
         """Initialize RTC processor if RTC is enabled in config."""
@@ -197,7 +197,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
         return self.parameters()
 
     def _get_action_chunk(
-        self, batch: dict[str, Tensor], noise: Tensor | None = None, **kwargs: Unpack[ActionSelectKwargs]
+        self, batch: dict[str, Tensor], noise: Tensor | None = None, geometry_history=None, **kwargs: Unpack[ActionSelectKwargs]
     ) -> Tensor:
         # TODO: Check if this for loop is needed.
         # Context: In fact, self.queues contains only ACTION field, and in inference, we don't have action in the batch
@@ -214,7 +214,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
         lang_masks = batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
 
         actions = self.model.sample_actions(
-            images, img_masks, lang_tokens, lang_masks, state, noise=noise, **kwargs
+            images, img_masks, lang_tokens, lang_masks, state, noise=noise, geometry_history=geometry_history, **kwargs
         )
 
         # Unpad actions
@@ -241,7 +241,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
         batch = self._prepare_batch(batch)
         self._queues = populate_queues(self._queues, batch, exclude_keys=[ACTION])
 
-        actions = self._get_action_chunk(batch, noise, **kwargs)
+        actions = self._get_action_chunk(batch, noise, geometry_history=self.prepare_wnm_geometry_history(batch, online=True), **kwargs)
         return actions
 
     @torch.no_grad()
@@ -264,13 +264,32 @@ class SmolVLAPolicy(PreTrainedPolicy):
         self._queues = populate_queues(self._queues, batch, exclude_keys=[ACTION])
 
         if self._check_get_actions_condition():
-            actions = self._get_action_chunk(batch, noise)
+            actions = self._get_action_chunk(batch, noise, geometry_history=self.prepare_wnm_geometry_history(batch, online=True))
 
             # `self.predict_action_chunk` returns a (batch_size, n_action_steps, action_dim) tensor, but the queue
             # effectively has shape (n_action_steps, batch_size, *), hence the transpose.
             self._queues[ACTION].extend(actions.transpose(0, 1)[: self.config.n_action_steps])
 
         return self._queues[ACTION].popleft()
+
+    def prepare_wnm_geometry_history(self, batch, online=False):
+        if not self.config.use_wnm_geometry_tokens:
+            return None
+        key = self.config.wnm_geometry_image_key
+        if key not in batch:
+            raise ValueError(f"Missing WNM geometry image key: {key}")
+        frames = batch[key]
+        if online:
+            if frames.ndim != 4:
+                raise ValueError(f"Online geometry observation must be [B,C,H,W], got {tuple(frames.shape)}")
+            self._wnm_geometry_history.append(frames)
+            seq = list(self._wnm_geometry_history)
+            while len(seq) < self.config.wnm_geometry_history:
+                seq.insert(0, seq[0])
+            return torch.stack(seq, dim=1)
+        if frames.ndim != 5 or frames.shape[1] != self.config.wnm_geometry_history:
+            raise ValueError(f"Expected {self.config.wnm_geometry_history} offline geometry frames, got {tuple(frames.shape)}")
+        return frames
 
     def _check_get_actions_condition(self) -> bool:
         return len(self._queues[ACTION]) == 0
@@ -302,7 +321,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
         actions = self.prepare_action(batch)
         actions_is_pad = batch.get("action_is_pad")
         loss_dict = {}
-        losses = self.model.forward(images, img_masks, lang_tokens, lang_masks, state, actions, noise, time)
+        losses = self.model.forward(images, img_masks, lang_tokens, lang_masks, state, actions, noise, time, geometry_history=self.prepare_wnm_geometry_history(batch, online=False))
         depth_loss = self.model.compute_depth_distillation(images, self._last_image_valid_masks)
         depth_weight = depth_lambda(self.model._depth_step, self.config.depth_distillation_lambda, self.config.depth_distillation_warmup_steps) if depth_loss is not None else 0.0
         if depth_loss is not None:
