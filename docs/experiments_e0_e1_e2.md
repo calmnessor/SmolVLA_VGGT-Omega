@@ -282,7 +282,7 @@ outputs/smolvla_libero_vggt_e2_lambda001
 - 当前最佳已完成模型仍为 E1（59.5%）；`lambda=0.01` 相比 `lambda=0.05`（56.0%）提高 1.0 个百分点，但仍比 E1 低 2.5 个百分点。
 - 后续报告区分训练完成、checkpoint 完整和评估完成。
 
-## 12. E4：Action-Preserving Geometry Distillation（实现中）
+## 12. E4：Action-Preserving Geometry Distillation
 
 E4 不更新冻结的 VGGT register，而是保护 register 经过 `SceneProjector` 后形成的 action-oriented representation。训练时分别计算 `SceneProjector` 上的 action/depth 梯度：当 depth 梯度与 action 梯度冲突时，删除冲突分量；随后将 depth 对 action 的有效梯度比例限制为 `0.15`。DepthProbe 仍正常接收 depth loss，但与 action/shared 参数分组裁剪，避免 global clipping 被 depth-only 梯度间接影响。
 
@@ -295,3 +295,16 @@ depth_gradient_ratio_cap = 0.15
 ```
 
 E4 默认关闭，E0/E1/E2 的行为不变。正式实验仍应从 E0 的 `030000` checkpoint 初始化，使用与 E1/E2 相同的 30,000 steps、有效 batch size 16 和四 suite 评估协议。实现后先运行 100--200 steps debug，检查 projection/cap 指标、无 NaN/DDP hang，再启动正式训练。
+
+
+
+
+### E4 完整训练记录
+
+E4（Action-Preserving Geometry Distillation）冻结 VGGT-Omega，仅保护 registers 经 SceneProjector 投影后的 action-oriented representation。RGB -> frozen VGGT -> registers -> SceneProjector -> SmolVLA prefix -> action loss；同时 depth/confidence -> DepthProbe -> depth loss。每视角 16 个 2048 维 register 投影到 960 维，两个视角共 32 个 scene tokens。
+
+损失为 `L_total = L_action + lambda_depth * L_depth`，其中 L_action 是去 padding 后的 flow-matching loss，L_depth 是 confidence-masked log-L1 distillation loss；lambda 在 1000 steps 内从 0 warm up 到 0.05。共享 projector 的 depth gradient 在与 action gradient 冲突时投影掉冲突分量，并限制为 action gradient 的 0.15；DepthProbe 等 depth-only 参数独立 clipping。此操作不改变 loss 数值或评估 inference。
+
+代码提交：`f1a24f6e`、`193fd586`。改动涉及 configuration_smolvla.py、modeling_smolvla.py、lerobot_train.py、gradient_diagnostic.py 及测试；E4 默认关闭，E0/E1/E2 行为不变。正式训练从 E0 030000 checkpoint 初始化，双卡 DDP，每卡 batch 8、有效 batch 16、30K steps、seed 1000、ratio cap 0.15、confidence quantile 0.2、min valid ratio 0.25，输出 `outputs/smolvla_libero_vggt_e4_formal_v3`。
+
+100-step debug 已 100/100 正常结束，conflict_rate 48%、mean_cosine -0.0015；正式训练约 8000/30000 steps 时 loss_total 0.412、loss_depth 0.109、lambda 0.05、grad_norm 1.923，速度约 1.0--1.2 秒/step，无 NaN/DDP hang。missing-key 和 torchcodec/PyAV 信息均为预期告警。训练完成后按四 suite、400 episode 协议评估，并与 E1 59.5%、E2(0.05) 56.0%、E2(0.01) 57.0% 对比。
