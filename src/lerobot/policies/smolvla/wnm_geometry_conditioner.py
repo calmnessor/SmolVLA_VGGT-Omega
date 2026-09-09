@@ -30,6 +30,7 @@ class WNMGeometryConditioner(nn.Module):
     def __init__(self, config, output_dim: int, aggregator: nn.Module | None = None, adapter: nn.Module | None = None):
         super().__init__()
         self.config = config
+        self.output_dim = output_dim
         self.encoder_dtype = getattr(torch, config.wnm_geometry_encoder_dtype.replace("float", "float"), torch.bfloat16)
         self.compute_dtype = getattr(torch, config.wnm_geometry_compute_dtype.replace("float", "float"), torch.bfloat16)
         if aggregator is None:
