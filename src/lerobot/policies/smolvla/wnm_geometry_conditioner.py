@@ -61,7 +61,9 @@ class WNMGeometryConditioner(nn.Module):
         if history.ndim != 5 or history.shape[1] != self.config.wnm_geometry_history:
             raise ValueError(f"Expected {self.config.wnm_geometry_history} history frames, got {tuple(history.shape)}")
         images = prepare_vggt_history(history, self.config.wnm_geometry_resolution)
-        images = images.to(next(self.adapter.parameters()).device)
+        device = next(self.adapter.parameters()).device
+        self._aggregator.to(device=device)
+        images = images.to(device=device)
         with torch.no_grad():
             result = self._aggregator(images)
         aggregated, patch_start = result if isinstance(result, tuple) else (result, getattr(self._aggregator, "patch_token_start", 0))
