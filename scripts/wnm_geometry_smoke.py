@@ -39,7 +39,9 @@ def main() -> None:
     if any(param.grad is not None for param in conditioner._aggregator.parameters()):
         raise AssertionError("Frozen Aggregator received gradients")
     adapter_grads = [param.grad for param in conditioner.adapter.parameters() if param.grad is not None]
-    if not adapter_grads or not any(torch.isfinite(grad).all() and grad.abs().sum() > 0 for grad in adapter_grads):
+    if not adapter_grads or not any(
+        torch.isfinite(grad).all() and grad.abs().sum() > 0 for grad in adapter_grads
+    ):
         raise AssertionError("Adapter did not receive finite non-zero gradients")
     print(f"real geometry smoke ok: shape={tuple(tokens.shape)} max_abs={tokens.abs().max().item():.6g}")
 
