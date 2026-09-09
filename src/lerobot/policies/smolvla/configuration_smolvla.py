@@ -96,7 +96,7 @@ class SmolVLAConfig(PreTrainedConfig):
     wnm_geometry_patch_size: int = 16
     wnm_geometry_encoder_dtype: str = "bfloat16"
     wnm_geometry_compute_dtype: str = "bfloat16"
-    wnm_geometry_adapter_dim: int = 1024
+    wnm_geometry_adapter_dim: int = 512
     wnm_geometry_adapter_heads: int = 8
     wnm_geometry_adapter_blocks: int = 2
     wnm_geometry_target_grid: tuple[int, int, int] = (2, 4, 4)
