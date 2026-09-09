@@ -87,6 +87,19 @@ class SmolVLAConfig(PreTrainedConfig):
     add_image_special_tokens: bool = False  # Whether to use special image tokens around image features.
 
     use_vggt_scene_tokens: bool = False
+    use_wnm_geometry_tokens: bool = False
+    wnm_geometry_history: int = 4
+    wnm_geometry_image_key: str = "observation.images.image"
+    wnm_geometry_code_path: str | None = None
+    wnm_geometry_checkpoint: str | None = None
+    wnm_geometry_resolution: int = 512
+    wnm_geometry_patch_size: int = 16
+    wnm_geometry_encoder_dtype: str = "bfloat16"
+    wnm_geometry_compute_dtype: str = "bfloat16"
+    wnm_geometry_adapter_dim: int = 512
+    wnm_geometry_adapter_heads: int = 8
+    wnm_geometry_adapter_blocks: int = 2
+    wnm_geometry_target_grid: tuple[int, int, int] = (2, 4, 4)
     vggt_checkpoint: str | None = None
     vggt_code_path: str | None = None
     vggt_image_resolution: int = 512
@@ -133,6 +146,19 @@ class SmolVLAConfig(PreTrainedConfig):
                 f"The chunk size is the upper bound for the number of action steps per model invocation. Got "
                 f"{self.n_action_steps} for `n_action_steps` and {self.chunk_size} for `chunk_size`."
             )
+        if self.use_wnm_geometry_tokens and self.use_vggt_scene_tokens:
+            raise ValueError("WNM geometry tokens and VGGT scene tokens are mutually exclusive")
+        if self.use_wnm_geometry_tokens and self.wnm_geometry_history != self.n_obs_steps:
+            raise ValueError("wnm_geometry_history must equal n_obs_steps when WNM geometry tokens are enabled")
+        if self.use_wnm_geometry_tokens:
+            if self.wnm_geometry_resolution <= 0 or self.wnm_geometry_patch_size <= 0 or self.wnm_geometry_resolution % self.wnm_geometry_patch_size:
+                raise ValueError("wnm_geometry_resolution must be positive and divisible by wnm_geometry_patch_size")
+            if any(v <= 0 for v in self.wnm_geometry_target_grid):
+                raise ValueError("wnm_geometry_target_grid values must be positive")
+            if self.wnm_geometry_adapter_dim % self.wnm_geometry_adapter_heads:
+                raise ValueError("wnm_geometry_adapter_dim must be divisible by wnm_geometry_adapter_heads")
+        if self.wnm_geometry_history < 1:
+            raise ValueError("wnm_geometry_history must be positive")
         if self.use_delta_joint_actions_aloha:
             raise NotImplementedError(
                 "`use_delta_joint_actions_aloha` is used by smolvla for aloha real models. It is not ported yet in LeRobot."
@@ -166,6 +192,8 @@ class SmolVLAConfig(PreTrainedConfig):
 
     @property
     def observation_delta_indices(self) -> list:
+        if self.use_wnm_geometry_tokens:
+            return list(range(-self.wnm_geometry_history + 1, 1))
         return [0]
 
     @property

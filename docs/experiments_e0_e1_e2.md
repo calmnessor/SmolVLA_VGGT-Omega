@@ -308,3 +308,22 @@ E4（Action-Preserving Geometry Distillation）冻结 VGGT-Omega，仅保护 reg
 代码提交：`f1a24f6e`、`193fd586`。改动涉及 configuration_smolvla.py、modeling_smolvla.py、lerobot_train.py、gradient_diagnostic.py 及测试；E4 默认关闭，E0/E1/E2 行为不变。正式训练从 E0 030000 checkpoint 初始化，双卡 DDP，每卡 batch 8、有效 batch 16、30K steps、seed 1000、ratio cap 0.15、confidence quantile 0.2、min valid ratio 0.25，输出 `outputs/smolvla_libero_vggt_e4_formal_v3`。
 
 100-step debug 已 100/100 正常结束，conflict_rate 48%、mean_cosine -0.0015；正式训练约 8000/30000 steps 时 loss_total 0.412、loss_depth 0.109、lambda 0.05、grad_norm 1.923，速度约 1.0--1.2 秒/step，无 NaN/DDP hang。missing-key 和 torchcodec/PyAV 信息均为预期告警。训练完成后按四 suite、400 episode 协议评估，并与 E1 59.5%、E2(0.05) 56.0%、E2(0.01) 57.0% 对比。
+
+
+## 13. WNM Geometry Adapter
+
+WNM 模式使用单个 `observation.images.image` 摄像头的连续四帧。四帧先 resize 到 512x512，经外部恢复的冻结 VGGT-Omega 提取多层 patch 特征，再由可训练的 `VGGTOmegaGeometryAdapter` 重采样为 `(2,4,4)=32` 个 geometry tokens。Aggregator 不进入 policy state dict；Adapter 进入 checkpoint，并在 PEFT 下通过 `modules_to_save` 保存。
+
+该模式与 `use_vggt_scene_tokens` 互斥，不增加辅助损失，也不修改 action flow-matching、suffix 或 Euler integration。训练配置示例：
+
+```text
+policy.type=smolvla
+policy.use_wnm_geometry_tokens=true
+policy.n_obs_steps=4
+policy.wnm_geometry_history=4
+policy.wnm_geometry_image_key=observation.images.image
+policy.wnm_geometry_code_path=/path/to/WNM-3D/gammanav/vln/model
+policy.wnm_geometry_checkpoint=/path/to/vggt_omega.pt
+```
+
+每个在线推理调用都会先更新四帧 deque，再决定是否生成新的 action chunk；离线训练则直接使用 LeRobot 的 `[-3,-2,-1,0]` observation delta indices。
