@@ -197,7 +197,11 @@ class SmolVLAPolicy(PreTrainedPolicy):
         return self.parameters()
 
     def _get_action_chunk(
-        self, batch: dict[str, Tensor], noise: Tensor | None = None, geometry_history=None, **kwargs: Unpack[ActionSelectKwargs]
+        self,
+        batch: dict[str, Tensor],
+        noise: Tensor | None = None,
+        geometry_history=None,
+        **kwargs: Unpack[ActionSelectKwargs],
     ) -> Tensor:
         # TODO: Check if this for loop is needed.
         # Context: In fact, self.queues contains only ACTION field, and in inference, we don't have action in the batch
@@ -214,7 +218,14 @@ class SmolVLAPolicy(PreTrainedPolicy):
         lang_masks = batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
 
         actions = self.model.sample_actions(
-            images, img_masks, lang_tokens, lang_masks, state, noise=noise, geometry_history=geometry_history, **kwargs
+            images,
+            img_masks,
+            lang_tokens,
+            lang_masks,
+            state,
+            noise=noise,
+            geometry_history=geometry_history,
+            **kwargs,
         )
 
         # Unpad actions
@@ -241,7 +252,9 @@ class SmolVLAPolicy(PreTrainedPolicy):
         batch = self._prepare_batch(batch)
         self._queues = populate_queues(self._queues, batch, exclude_keys=[ACTION])
 
-        actions = self._get_action_chunk(batch, noise, geometry_history=self.prepare_wnm_geometry_history(batch, online=True), **kwargs)
+        actions = self._get_action_chunk(
+            batch, noise, geometry_history=self.prepare_wnm_geometry_history(batch, online=True), **kwargs
+        )
         return actions
 
     @torch.no_grad()
@@ -289,7 +302,9 @@ class SmolVLAPolicy(PreTrainedPolicy):
                 seq.insert(0, seq[0])
             return torch.stack(seq, dim=1)
         if frames.ndim != 5 or frames.shape[1] != self.config.wnm_geometry_history:
-            raise ValueError(f"Expected {self.config.wnm_geometry_history} offline geometry frames, got {tuple(frames.shape)}")
+            raise ValueError(
+                f"Expected {self.config.wnm_geometry_history} offline geometry frames, got {tuple(frames.shape)}"
+            )
         return frames
 
     def _check_get_actions_condition(self) -> bool:
@@ -322,9 +337,27 @@ class SmolVLAPolicy(PreTrainedPolicy):
         actions = self.prepare_action(batch)
         actions_is_pad = batch.get("action_is_pad")
         loss_dict = {}
-        losses = self.model.forward(images, img_masks, lang_tokens, lang_masks, state, actions, noise, time, geometry_history=self.prepare_wnm_geometry_history(batch, online=False))
+        losses = self.model.forward(
+            images,
+            img_masks,
+            lang_tokens,
+            lang_masks,
+            state,
+            actions,
+            noise,
+            time,
+            geometry_history=self.prepare_wnm_geometry_history(batch, online=False),
+        )
         depth_loss = self.model.compute_depth_distillation(images, self._last_image_valid_masks)
-        depth_weight = depth_lambda(self.model._depth_step, self.config.depth_distillation_lambda, self.config.depth_distillation_warmup_steps) if depth_loss is not None else 0.0
+        depth_weight = (
+            depth_lambda(
+                self.model._depth_step,
+                self.config.depth_distillation_lambda,
+                self.config.depth_distillation_warmup_steps,
+            )
+            if depth_loss is not None
+            else 0.0
+        )
         if depth_loss is not None:
             self.model._depth_step += 1
         original_action_dim = self.config.action_feature.shape[0]
@@ -384,7 +417,9 @@ class SmolVLAPolicy(PreTrainedPolicy):
         # Preprocess image features present in the batch
         for key in present_img_keys:
             img = batch[key][:, -1, :, :, :] if batch[key].ndim == 5 else batch[key]
-            valid_pixels = torch.ones((img.shape[0], 1, img.shape[-2], img.shape[-1]), dtype=img.dtype, device=img.device)
+            valid_pixels = torch.ones(
+                (img.shape[0], 1, img.shape[-2], img.shape[-1]), dtype=img.dtype, device=img.device
+            )
             if self.config.resize_imgs_with_padding is not None:
                 # SmolVLA stores the target as (width, height); the shared helper expects (height, width).
                 img = resize_with_pad(
@@ -472,7 +507,9 @@ class SmolVLAPolicy(PreTrainedPolicy):
         target_modules = rf"(model\.vlm_with_expert\.lm_expert\..*\.(q|v)_proj|model\.({common_projections}))"
         return {
             "target_modules": target_modules,
-            "modules_to_save": ["model.wnm_geometry_conditioner.adapter"] if self.config.use_wnm_geometry_tokens else [],
+            "modules_to_save": ["model.wnm_geometry_conditioner.adapter"]
+            if self.config.use_wnm_geometry_tokens
+            else [],
         }
 
     def _validate_peft_config(self, peft_config) -> None:
@@ -574,13 +611,24 @@ class VLAFlowMatching(nn.Module):
         if self.config.use_vggt_scene_tokens:
             if not self.config.vggt_checkpoint or not self.config.vggt_code_path:
                 raise ValueError("VGGT checkpoint and code path are required")
-            self.vggt_scene_encoder = FrozenVGGTSceneEncoder(self.config.vggt_checkpoint, self.config.vggt_code_path, self.config.vggt_image_resolution, self.config.vggt_num_register_tokens, self.config.device or "cuda", self.config.use_vggt_depth_distillation)
-            self.scene_projector = nn.Linear(self.vggt_scene_encoder.output_dim, self.vlm_with_expert.config.text_config.hidden_size)
+            self.vggt_scene_encoder = FrozenVGGTSceneEncoder(
+                self.config.vggt_checkpoint,
+                self.config.vggt_code_path,
+                self.config.vggt_image_resolution,
+                self.config.vggt_num_register_tokens,
+                self.config.device or "cuda",
+                self.config.use_vggt_depth_distillation,
+            )
+            self.scene_projector = nn.Linear(
+                self.vggt_scene_encoder.output_dim, self.vlm_with_expert.config.text_config.hidden_size
+            )
             if self.config.use_vggt_depth_distillation:
                 hidden_size = self.vlm_with_expert.config.text_config.hidden_size
                 self.depth_probe = SpatialRegisterDepthProbe(hidden_size, hidden_size)
         if self.config.use_wnm_geometry_tokens:
-            self.wnm_geometry_conditioner = WNMGeometryConditioner(self.config, self.vlm_with_expert.config.text_config.hidden_size)
+            self.wnm_geometry_conditioner = WNMGeometryConditioner(
+                self.config, self.vlm_with_expert.config.text_config.hidden_size
+            )
 
         self.set_requires_grad()
         self.fake_image_token = self.vlm_with_expert.processor.tokenizer.fake_image_token_id
@@ -622,7 +670,13 @@ class VLAFlowMatching(nn.Module):
         return sample_time_beta(bsize, device, alpha=1.5, beta=1.0, scale=0.999, offset=0.001)
 
     def embed_prefix(
-        self, images, img_masks, lang_tokens, lang_masks, state: torch.Tensor = None, geometry_tokens: torch.Tensor = None
+        self,
+        images,
+        img_masks,
+        lang_tokens,
+        lang_masks,
+        state: torch.Tensor = None,
+        geometry_tokens: torch.Tensor = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Embed images with SigLIP and language tokens with embedding layer to prepare
         for SmolVLM transformer processing.
@@ -694,7 +748,9 @@ class VLAFlowMatching(nn.Module):
         if geometry_tokens is not None:
             geometry_tokens = geometry_tokens.to(device=img_emb.device, dtype=img_emb.dtype)
             embs.append(geometry_tokens)
-            pad_masks.append(torch.ones(geometry_tokens.shape[:2], dtype=torch.bool, device=geometry_tokens.device))
+            pad_masks.append(
+                torch.ones(geometry_tokens.shape[:2], dtype=torch.bool, device=geometry_tokens.device)
+            )
             att_masks += [0] * geometry_tokens.shape[1]
 
         lang_emb = self.vlm_with_expert.embed_language_tokens(lang_tokens)
@@ -778,7 +834,9 @@ class VLAFlowMatching(nn.Module):
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
         return embs, pad_masks, att_masks
 
-    def compute_depth_distillation(self, images: list[Tensor], image_valid_masks: list[Tensor]) -> Tensor | None:
+    def compute_depth_distillation(
+        self, images: list[Tensor], image_valid_masks: list[Tensor]
+    ) -> Tensor | None:
         if not self.training or self.depth_probe is None:
             return None
         teacher = getattr(self, "_last_vggt_teacher", None)
@@ -801,13 +859,20 @@ class VLAFlowMatching(nn.Module):
             if patch_side * patch_side != image_tokens.shape[1]:
                 raise RuntimeError(f"Expected square spatial image tokens, got {image_tokens.shape[1]}")
             student = self.depth_probe(
-                image_tokens.to(dtype=probe_dtype), projected[:, view].to(dtype=probe_dtype), (patch_side, patch_side)
+                image_tokens.to(dtype=probe_dtype),
+                projected[:, view].to(dtype=probe_dtype),
+                (patch_side, patch_side),
             )
             dense_depth = teacher["depth"][:, view].squeeze(-1)
             dense_conf = teacher["depth_conf"][:, view]
-            non_padding = F.interpolate(image_valid_masks[view][:, None].float(), size=dense_depth.shape[-2:], mode="nearest")[:, 0].bool()
+            non_padding = F.interpolate(
+                image_valid_masks[view][:, None].float(), size=dense_depth.shape[-2:], mode="nearest"
+            )[:, 0].bool()
             target, mask = pool_teacher_to_patch_grid(
-                dense_depth, dense_conf, non_padding, (patch_side, patch_side),
+                dense_depth,
+                dense_conf,
+                non_padding,
+                (patch_side, patch_side),
                 self.config.depth_distillation_confidence_quantile,
                 self.config.depth_distillation_min_valid_ratio,
             )
@@ -817,7 +882,16 @@ class VLAFlowMatching(nn.Module):
         return confidence_masked_log_l1(students, targets, masks)
 
     def forward(
-        self, images, img_masks, lang_tokens, lang_masks, state, actions, noise=None, time=None, geometry_history=None
+        self,
+        images,
+        img_masks,
+        lang_tokens,
+        lang_masks,
+        state,
+        actions,
+        noise=None,
+        time=None,
+        geometry_history=None,
     ) -> Tensor:
         """Do a full training forward pass and compute the loss (batch_size x num_steps x num_motors)"""
         if noise is None:
@@ -830,7 +904,12 @@ class VLAFlowMatching(nn.Module):
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
-            images, img_masks, lang_tokens, lang_masks, state=state, geometry_tokens=self.encode_geometry(geometry_history)
+            images,
+            img_masks,
+            lang_tokens,
+            lang_masks,
+            state=state,
+            geometry_tokens=self.encode_geometry(geometry_history),
         )
         suffix_embs, suffix_pad_masks, suffix_att_masks = self.embed_suffix(x_t, time)
 
@@ -873,7 +952,12 @@ class VLAFlowMatching(nn.Module):
             noise = self.sample_noise(actions_shape, device)
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
-            images, img_masks, lang_tokens, lang_masks, state=state, geometry_tokens=self.encode_geometry(geometry_history)
+            images,
+            img_masks,
+            lang_tokens,
+            lang_masks,
+            state=state,
+            geometry_tokens=self.encode_geometry(geometry_history),
         )
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1

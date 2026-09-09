@@ -17,7 +17,9 @@ def test_wnm_config_validates_shapes_and_history():
     cfg = SmolVLAConfig(use_wnm_geometry_tokens=True, n_obs_steps=4, wnm_geometry_history=4)
     assert cfg.observation_delta_indices == [-3, -2, -1, 0]
     with pytest.raises(ValueError, match="divisible"):
-        SmolVLAConfig(use_wnm_geometry_tokens=True, n_obs_steps=4, wnm_geometry_history=4, wnm_geometry_resolution=513)
+        SmolVLAConfig(
+            use_wnm_geometry_tokens=True, n_obs_steps=4, wnm_geometry_history=4, wnm_geometry_resolution=513
+        )
 
 
 def test_conditioner_state_does_not_register_external_aggregator():
