@@ -150,6 +150,13 @@ class SmolVLAConfig(PreTrainedConfig):
             raise ValueError("WNM geometry tokens and VGGT scene tokens are mutually exclusive")
         if self.use_wnm_geometry_tokens and self.wnm_geometry_history != self.n_obs_steps:
             raise ValueError("wnm_geometry_history must equal n_obs_steps when WNM geometry tokens are enabled")
+        if self.use_wnm_geometry_tokens:
+            if self.wnm_geometry_resolution <= 0 or self.wnm_geometry_patch_size <= 0 or self.wnm_geometry_resolution % self.wnm_geometry_patch_size:
+                raise ValueError("wnm_geometry_resolution must be positive and divisible by wnm_geometry_patch_size")
+            if any(v <= 0 for v in self.wnm_geometry_target_grid):
+                raise ValueError("wnm_geometry_target_grid values must be positive")
+            if self.wnm_geometry_adapter_dim % self.wnm_geometry_adapter_heads:
+                raise ValueError("wnm_geometry_adapter_dim must be divisible by wnm_geometry_adapter_heads")
         if self.wnm_geometry_history < 1:
             raise ValueError("wnm_geometry_history must be positive")
         if self.use_delta_joint_actions_aloha:
