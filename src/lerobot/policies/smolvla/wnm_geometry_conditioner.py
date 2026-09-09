@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import sys
 from pathlib import Path
 
 import torch
-from torch import Tensor, nn
 import torch.nn.functional as F
+from torch import Tensor, nn
+
+logger = logging.getLogger(__name__)
 
 
 def prepare_vggt_history(history: Tensor, resolution: int) -> Tensor:
@@ -36,6 +39,8 @@ class WNMGeometryConditioner(nn.Module):
         if aggregator is None:
             if not config.wnm_geometry_code_path:
                 raise ValueError("wnm_geometry_code_path is required for production WNM geometry")
+            if not config.wnm_geometry_checkpoint:
+                raise ValueError("wnm_geometry_checkpoint is required for production WNM geometry")
             root = str(Path(config.wnm_geometry_code_path).expanduser())
             if root not in sys.path:
                 sys.path.insert(0, root)
@@ -58,7 +63,16 @@ class WNMGeometryConditioner(nn.Module):
                             break
                 if not matched:
                     raise RuntimeError("No VGGT aggregator parameters matched checkpoint")
-                aggregator.load_state_dict(matched, strict=False)
+                missing, unexpected = aggregator.load_state_dict(matched, strict=False)
+                log_fn = logger.warning if missing or unexpected else logger.info
+                log_fn(
+                    "VGGT checkpoint loaded: matched=%d missing=%d unexpected=%d",
+                    len(matched),
+                    len(missing),
+                    len(unexpected),
+                )
+                if missing:
+                    logger.warning("VGGT checkpoint missing sample: %s", missing[:10])
         self.__dict__["_aggregator"] = aggregator
         self._freeze_aggregator()
         if adapter is None:
