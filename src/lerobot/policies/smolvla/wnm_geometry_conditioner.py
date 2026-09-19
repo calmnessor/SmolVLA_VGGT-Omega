@@ -12,6 +12,23 @@ from torch import Tensor, nn
 logger = logging.getLogger(__name__)
 
 
+def apply_history_ablation(history: Tensor, mode: str) -> Tensor:
+    """Apply a deterministic temporal perturbation to [B,T,C,H,W]."""
+    if history.ndim != 5:
+        raise ValueError(f"Expected history [B,T,C,H,W], got {tuple(history.shape)}")
+    if mode == "real":
+        return history
+    if mode == "repeat_current":
+        return history[:, -1:].expand_as(history)
+    if mode == "reverse":
+        return history.flip(dims=(1,))
+    if mode == "shuffle":
+        if history.shape[1] != 4:
+            raise ValueError("shuffle history ablation requires exactly 4 frames")
+        return history[:, (1, 3, 0, 2)]
+    raise ValueError(f"Unknown history ablation mode: {mode!r}")
+
+
 def prepare_vggt_history(history: Tensor, resolution: int) -> Tensor:
     if history.ndim != 5 or history.shape[2] != 3:
         raise ValueError(f"Expected history [B,T,3,H,W], got {tuple(history.shape)}")

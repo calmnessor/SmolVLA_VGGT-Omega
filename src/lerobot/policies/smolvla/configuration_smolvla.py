@@ -89,6 +89,7 @@ class SmolVLAConfig(PreTrainedConfig):
     use_vggt_scene_tokens: bool = False
     use_wnm_geometry_tokens: bool = False
     wnm_geometry_history: int = 4
+    wnm_geometry_history_ablation: str = "real"
     wnm_geometry_image_key: str = "observation.images.image"
     wnm_geometry_code_path: str | None = None
     wnm_geometry_checkpoint: str | None = None
@@ -165,6 +166,8 @@ class SmolVLAConfig(PreTrainedConfig):
                 raise ValueError("wnm_geometry_target_grid values must be positive")
             if self.wnm_geometry_adapter_dim % self.wnm_geometry_adapter_heads:
                 raise ValueError("wnm_geometry_adapter_dim must be divisible by wnm_geometry_adapter_heads")
+        if self.wnm_geometry_history_ablation not in {"real", "repeat_current", "reverse", "shuffle"}:
+            raise ValueError(f"Unknown history ablation mode: {self.wnm_geometry_history_ablation!r}")
         if self.wnm_geometry_history < 1:
             raise ValueError("wnm_geometry_history must be positive")
         if self.use_delta_joint_actions_aloha:

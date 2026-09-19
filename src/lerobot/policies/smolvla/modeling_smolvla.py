@@ -80,7 +80,7 @@ from .depth_distillation import confidence_masked_log_l1, depth_lambda, pool_tea
 from .depth_probe import SpatialRegisterDepthProbe
 from .smolvlm_with_expert import SmolVLMWithExpertModel
 from .vggt_scene_encoder import FrozenVGGTSceneEncoder
-from .wnm_geometry_conditioner import WNMGeometryConditioner
+from .wnm_geometry_conditioner import WNMGeometryConditioner, apply_history_ablation
 
 
 class ActionSelectKwargs(TypedDict, total=False):
@@ -300,7 +300,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
             seq = list(self._wnm_geometry_history)
             while len(seq) < self.config.wnm_geometry_history:
                 seq.insert(0, seq[0])
-            return torch.stack(seq, dim=1)
+            return apply_history_ablation(torch.stack(seq, dim=1), self.config.wnm_geometry_history_ablation)
         if frames.ndim != 5 or frames.shape[1] != self.config.wnm_geometry_history:
             raise ValueError(
                 f"Expected {self.config.wnm_geometry_history} offline geometry frames, got {tuple(frames.shape)}"

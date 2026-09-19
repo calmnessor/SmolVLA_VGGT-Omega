@@ -3,7 +3,29 @@ import torch
 from torch import nn
 
 from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
-from lerobot.policies.smolvla.wnm_geometry_conditioner import prepare_vggt_history
+from lerobot.policies.smolvla.wnm_geometry_conditioner import (
+    apply_history_ablation,
+    prepare_vggt_history,
+)
+
+
+def test_history_ablation_repeat_current_replaces_all_frames():
+    history = torch.arange(4, dtype=torch.float32).view(1, 4, 1, 1, 1)
+    result = apply_history_ablation(history, "repeat_current")
+    assert result.flatten().tolist() == [3.0, 3.0, 3.0, 3.0]
+
+
+def test_history_ablation_reverse_preserves_temporal_values():
+    history = torch.arange(4, dtype=torch.float32).view(1, 4, 1, 1, 1)
+    result = apply_history_ablation(history, "reverse")
+    assert result.flatten().tolist() == [3.0, 2.0, 1.0, 0.0]
+
+
+def test_history_ablation_rejects_unknown_mode():
+    history = torch.zeros(1, 4, 1, 1, 1)
+    with pytest.raises(ValueError, match="Unknown history ablation"):
+        apply_history_ablation(history, "bad")
+
 
 
 def test_prepare_vggt_history_scales_uint8_without_saturation():
@@ -20,6 +42,8 @@ def test_wnm_config_validates_shapes_and_history():
         SmolVLAConfig(
             use_wnm_geometry_tokens=True, n_obs_steps=4, wnm_geometry_history=4, wnm_geometry_resolution=513
         )
+    with pytest.raises(ValueError, match="history ablation"):
+        SmolVLAConfig(wnm_geometry_history_ablation="bad")
 
 
 def test_conditioner_state_does_not_register_external_aggregator():
